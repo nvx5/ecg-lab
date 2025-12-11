@@ -6,28 +6,14 @@
  */
 
 import type { PathologyType, ECGOptions, ECGInstance, ECGConfig } from './core/types';
-import { getPathologyConfig, getPathologyDisplayName } from './core/pathologies';
+import { getPathologyConfig, getPathologyDisplayName, PATHOLOGIES as PATHOLOGY_LIST } from './core/pathologies';
 import { CanvasRenderer } from './renderer/canvas-renderer';
 
 // Re-export types for convenience
 export type { PathologyType, ECGOptions, ECGInstance };
 
-// Re-export utility function
-export { getPathologyDisplayName };
-
-/**
- * Supported pathology types as constants
- */
-export const PATHOLOGIES = {
-  NORMAL: 'normal' as const,
-  ATRIAL_FIBRILLATION: 'atrial-fibrillation' as const,
-  SINUS_TACHYCARDIA: 'sinus-tachycardia' as const,
-  SINUS_BRADYCARDIA: 'sinus-bradycardia' as const,
-  ATRIAL_FLUTTER: 'atrial-flutter' as const,
-  VENTRICULAR_TACHYCARDIA: 'ventricular-tachycardia' as const,
-  VENTRICULAR_FIBRILLATION: 'ventricular-fibrillation' as const,
-  HYPERKALAEMIA: 'hyperkalaemia' as const,
-} as const;
+// Re-export utility function and pathology list
+export { getPathologyDisplayName, PATHOLOGY_LIST as PATHOLOGIES };
 
 /**
  * Validate and clamp heart rate to reasonable range
@@ -48,18 +34,7 @@ function validateHeartRate(rate: number): number {
  * Validate pathology type, fallback to 'normal' if invalid
  */
 function validatePathology(pathology: string | undefined): PathologyType {
-  const validPathologies: PathologyType[] = [
-    'normal',
-    'atrial-fibrillation',
-    'sinus-tachycardia',
-    'sinus-bradycardia',
-    'atrial-flutter',
-    'ventricular-tachycardia',
-    'ventricular-fibrillation',
-    'hyperkalaemia',
-  ];
-
-  if (!pathology || !validPathologies.includes(pathology as PathologyType)) {
+  if (!pathology || !PATHOLOGY_LIST.includes(pathology as PathologyType)) {
     if (pathology) {
       console.warn(`Invalid pathology "${pathology}", using "normal" instead`);
     }

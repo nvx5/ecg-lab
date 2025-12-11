@@ -23,6 +23,8 @@
   "scripts": {
     "build": "tsc && vite build",
     "dev": "vite build --watch",
+    "demo": "npm run build && vite preview --open",
+    "demo:dev": "vite --open demo.html",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },

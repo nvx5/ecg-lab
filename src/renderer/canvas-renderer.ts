@@ -4,13 +4,6 @@
 
 import type { ECGConfig, PathologyType } from '../core/types';
 import { generateECGComplex } from '../core/generator';
-import { getPathologyConfig } from '../core/pathologies';
-
-interface WaveformSample {
-  time: number;
-  value: number;
-  pathology: PathologyType;
-}
 
 /**
  * Internal renderer class that handles canvas rendering and animation
@@ -22,14 +15,21 @@ export class CanvasRenderer {
   private config: ECGConfig;
   private targetPathology: PathologyType;
 
-  private readonly paperSpeed = 25; // mm/s
+  // ECG display constants
   private readonly pixelsPerMM = 4;
-  private readonly pixelsPerSecond = this.paperSpeed * this.pixelsPerMM;
-  private readonly sampleRate = 250;
+  private readonly amplitude = 10 * this.pixelsPerMM;
+  private readonly pixelsPerSecond = 25 * 4; // 100 pixels/second (25mm/s * 4px/mm)
+  private readonly timePerPixel = 1 / this.pixelsPerSecond; // 0.01 seconds per pixel
+  private readonly sweepBarWidth = 40;
 
-  private startTime = 0;
-  private waveformSamples: WaveformSample[] = [];
-  private readonly maxBufferSize: number;
+  // State
+  private waveformBuffer: Float32Array;
+  private sweepPosition: number = 0;
+  private lastUpdateTime: number = 0;
+  private sampleTime: number = 0;
+  private lastSweepX: number = -1;
+  private lastHeartRate: number = 72;
+  private phaseOffset: number = 0;
 
   private resizeObserver: ResizeObserver | null = null;
 
@@ -42,7 +42,10 @@ export class CanvasRenderer {
     this.ctx = ctx;
     this.config = config;
     this.targetPathology = config.pathology;
-    this.maxBufferSize = Math.ceil(10 * this.sampleRate);
+    this.lastHeartRate = config.heartRate || 72;
+    
+    this.waveformBuffer = new Float32Array(2000);
+    this.waveformBuffer.fill(NaN);
 
     this.setupCanvas();
     this.startAnimation();
@@ -56,143 +59,175 @@ export class CanvasRenderer {
         this.canvas.width = rect.width;
         this.canvas.height = rect.height;
       } else {
-        // If no parent, use canvas's own dimensions
         const width = this.canvas.clientWidth || 800;
         const height = this.canvas.clientHeight || 200;
         this.canvas.width = width;
         this.canvas.height = height;
       }
+      this.ensureBufferSize();
       this.draw();
     };
 
     resizeCanvas();
 
-    // Use ResizeObserver if available, fallback to window resize
     if (typeof ResizeObserver !== 'undefined') {
       const container = this.canvas.parentElement || document.body;
-      this.resizeObserver = new ResizeObserver(() => {
-        resizeCanvas();
-      });
+      this.resizeObserver = new ResizeObserver(resizeCanvas);
       this.resizeObserver.observe(container);
     } else {
       window.addEventListener('resize', resizeCanvas);
     }
   }
 
+  private ensureBufferSize() {
+    const width = this.canvas.width;
+    if (this.waveformBuffer.length !== width) {
+      const oldBuffer = this.waveformBuffer;
+      this.waveformBuffer = new Float32Array(width);
+      this.waveformBuffer.fill(NaN);
+      
+      const copyLength = Math.min(oldBuffer.length, width);
+      for (let i = 0; i < copyLength; i++) {
+        if (!isNaN(oldBuffer[i])) {
+          this.waveformBuffer[i] = oldBuffer[i];
+        }
+      }
+    }
+  }
+
+  /**
+   * Calculate time for a given pixel position accounting for wraps
+   */
+  private getTimeForPixel(xPos: number, width: number): number {
+    const totalPixelsTraveled = this.sampleTime * this.pixelsPerSecond;
+    const wraps = Math.floor(totalPixelsTraveled / width);
+    return (wraps * width + xPos) / this.pixelsPerSecond;
+  }
+
+  /**
+   * Generate and store ECG sample at a specific pixel position
+   */
+  private updateBufferAtPosition(xPos: number, width: number, centerY: number): void {
+    if (xPos < 0 || xPos >= width) return;
+    
+    const sampleTime = this.getTimeForPixel(xPos, width);
+    const value = this.generateSampleAtTime(sampleTime);
+    const yPos = centerY - (value * this.amplitude);
+    this.waveformBuffer[xPos] = yPos;
+  }
+
+  /**
+   * Update buffer for a range of pixel positions
+   */
+  private updateBufferRange(startX: number, endX: number, width: number, centerY: number): void {
+    const start = Math.max(0, Math.floor(startX));
+    const end = Math.min(width - 1, Math.floor(endX));
+    
+    for (let xPos = start; xPos <= end; xPos++) {
+      this.updateBufferAtPosition(xPos, width, centerY);
+    }
+  }
+
+  /**
+   * Handle sweep wrap - update buffer for wrapped region
+   */
+  private handleSweepWrap(startX: number, endX: number, width: number, centerY: number): void {
+    // Update end of previous cycle
+    this.updateBufferRange(startX, width - 1, width, centerY);
+    // Update start of new cycle
+    this.updateBufferRange(0, endX, width, centerY);
+  }
+
+  /**
+   * Update phase offset when heart rate changes to maintain continuity
+   */
+  private updatePhaseOffset(sweepX: number, width: number): void {
+    const currentHeartRate = this.config.heartRate || 72;
+    if (currentHeartRate === this.lastHeartRate) return;
+
+    const currentTime = Math.floor(sweepX) * this.timePerPixel;
+    const oldSecondsPerBeat = 60 / this.lastHeartRate;
+    const newSecondsPerBeat = 60 / currentHeartRate;
+    
+    const oldPhase = (currentTime % oldSecondsPerBeat) / oldSecondsPerBeat;
+    const newPhase = (currentTime % newSecondsPerBeat) / newSecondsPerBeat;
+    
+    this.phaseOffset = (oldPhase - newPhase + 1) % 1;
+    this.lastHeartRate = currentHeartRate;
+  }
+
+  /**
+   * Generate ECG sample value for a given time
+   */
   private generateSampleAtTime(timeInSeconds: number, pathology?: PathologyType): number {
     const samplePathology = pathology || this.targetPathology;
-    // Always use the current config's heart rate (user-specified or current value)
     const heartRate = this.config.heartRate || 72;
     const secondsPerBeat = 60 / heartRate;
-    const phase = (timeInSeconds % secondsPerBeat) / secondsPerBeat;
+    let phase = (timeInSeconds % secondsPerBeat) / secondsPerBeat;
     
-    // Use current config but override pathology for this sample
+    phase = (phase + this.phaseOffset) % 1;
+    
+    // Calculate beat number for amplitude variation
+    const beatNumber = Math.floor(timeInSeconds / secondsPerBeat);
+    
     const configForSample: ECGConfig = {
       ...this.config,
       pathology: samplePathology,
-      heartRate: heartRate,
+      heartRate,
     };
     
-    return generateECGComplex(phase, configForSample);
+    return generateECGComplex(phase, configForSample, beatNumber);
   }
 
-  private ensureBufferFilled(currentTime: number, canvasWidth: number) {
-    const currentPixelPosition = currentTime * this.pixelsPerSecond;
-    const viewportStartPixel = currentPixelPosition - canvasWidth;
-    const viewportEndPixel = currentPixelPosition;
-
-    const viewportStartTime = viewportStartPixel / this.pixelsPerSecond;
-    const viewportEndTime = viewportEndPixel / this.pixelsPerSecond;
-
-    const lookAheadSeconds = 5;
-    const lookBehindSeconds = 2;
-    const neededStartTime = viewportStartTime - lookBehindSeconds;
-    const neededEndTime = viewportEndTime + lookAheadSeconds;
-
-    const newSamplePathology = this.targetPathology;
-
-    if (this.waveformSamples.length === 0) {
-      const startSampleTime = Math.floor(neededStartTime * this.sampleRate) / this.sampleRate;
-      const totalSamples = Math.ceil((neededEndTime - startSampleTime) * this.sampleRate);
-
-      for (let i = 0; i <= totalSamples; i++) {
-        const sampleTime = startSampleTime + (i / this.sampleRate);
-        if (sampleTime <= neededEndTime) {
-          const value = this.generateSampleAtTime(sampleTime, newSamplePathology);
-          this.waveformSamples.push({ time: sampleTime, value, pathology: newSamplePathology });
-        }
-      }
+  /**
+   * Update sweep position and generate new samples
+   */
+  private updateSweep(width: number, centerY: number, deltaTimeSeconds: number): void {
+    this.sweepPosition += this.pixelsPerSecond * deltaTimeSeconds;
+    
+    if (this.sweepPosition >= width) {
+      this.sweepPosition %= width;
+      this.lastSweepX = -1;
+    }
+    
+    this.sampleTime += deltaTimeSeconds;
+    
+    const sweepX = this.sweepPosition;
+    this.updatePhaseOffset(sweepX, width);
+    
+    // Generate samples for pixels the sweep moved through
+    if (this.lastSweepX < 0) {
+      this.updateBufferRange(0, sweepX, width, centerY);
     } else {
-      const firstSampleTime = this.waveformSamples[0].time;
-      const lastSampleTime = this.waveformSamples[this.waveformSamples.length - 1].time;
-
-      if (firstSampleTime > neededStartTime) {
-        const samplesToAdd = Math.ceil((firstSampleTime - neededStartTime) * this.sampleRate);
-        const existingPathology = this.waveformSamples[0].pathology;
-        for (let i = samplesToAdd; i > 0; i--) {
-          const sampleTime = firstSampleTime - (i / this.sampleRate);
-          const value = this.generateSampleAtTime(sampleTime, existingPathology);
-          this.waveformSamples.unshift({ time: sampleTime, value, pathology: existingPathology });
-        }
-      }
-
-      if (lastSampleTime < neededEndTime) {
-        const samplesToAdd = Math.ceil((neededEndTime - lastSampleTime) * this.sampleRate);
-        for (let i = 1; i <= samplesToAdd; i++) {
-          const sampleTime = lastSampleTime + (i / this.sampleRate);
-          if (sampleTime <= neededEndTime) {
-            const value = this.generateSampleAtTime(sampleTime, newSamplePathology);
-            this.waveformSamples.push({ time: sampleTime, value, pathology: newSamplePathology });
-          }
-        }
+      const startX = Math.floor(this.lastSweepX);
+      const endX = Math.floor(sweepX);
+      
+      if (endX < startX) {
+        this.handleSweepWrap(startX, endX, width, centerY);
+      } else {
+        this.updateBufferRange(startX, endX, width, centerY);
       }
     }
-
-    const cutoffTime = viewportStartTime - 1;
-    while (this.waveformSamples.length > 0 && this.waveformSamples[0].time < cutoffTime) {
-      this.waveformSamples.shift();
-    }
-
-    if (this.waveformSamples.length > this.maxBufferSize) {
-      this.waveformSamples.shift();
-    }
+    
+    this.lastSweepX = sweepX;
   }
 
-  private draw() {
-    const { width, height } = this.canvas;
-    const ctx = this.ctx;
-
-    const currentTime = performance.now();
-    if (this.startTime === 0) {
-      this.startTime = currentTime;
-    }
-
-    const elapsedSeconds = (currentTime - this.startTime) / 1000;
-
-    this.ensureBufferFilled(elapsedSeconds, width);
-
-    // Clear canvas with black background
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, width, height);
-
-    if (this.waveformSamples.length === 0) return;
-
-    const centerY = height / 2;
-    const amplitude = 10 * this.pixelsPerMM;
-
-    // Draw center line (baseline)
+  /**
+   * Draw the baseline (center line)
+   */
+  private drawBaseline(ctx: CanvasRenderingContext2D, width: number, centerY: number): void {
     ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, centerY);
     ctx.lineTo(width, centerY);
     ctx.stroke();
+  }
 
-    const currentPixelPosition = elapsedSeconds * this.pixelsPerSecond;
-    const viewportStartPixel = currentPixelPosition - width;
-    const viewportEndPixel = currentPixelPosition;
-
-    // Draw waveform
+  /**
+   * Draw the ECG waveform from buffer
+   */
+  private drawWaveform(ctx: CanvasRenderingContext2D, width: number): void {
     ctx.strokeStyle = '#00ff00';
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
@@ -200,60 +235,77 @@ export class CanvasRenderer {
     ctx.beginPath();
 
     let isFirstPoint = true;
+    let lastValidX = -1;
 
-    const sampleCount = this.waveformSamples.length;
-    if (sampleCount === 0) return;
-
-    // Binary search for start index
-    let startIdx = 0;
-    let endIdx = sampleCount - 1;
-    let low = 0;
-    let high = sampleCount - 1;
-
-    while (low < high) {
-      const mid = (low + high) >> 1;
-      const samplePixel = this.waveformSamples[mid].time * this.pixelsPerSecond;
-      if (samplePixel < viewportStartPixel) {
-        low = mid + 1;
-      } else {
-        high = mid;
-      }
-    }
-    startIdx = Math.max(0, low - 1);
-
-    // Binary search for end index
-    low = startIdx;
-    high = sampleCount - 1;
-    while (low < high) {
-      const mid = (low + high) >> 1;
-      const samplePixel = this.waveformSamples[mid].time * this.pixelsPerSecond;
-      if (samplePixel <= viewportEndPixel) {
-        low = mid + 1;
-      } else {
-        high = mid;
-      }
-    }
-    endIdx = Math.min(sampleCount - 1, low);
-
-    // Draw waveform line
-    for (let i = startIdx; i <= endIdx; i++) {
-      const sample = this.waveformSamples[i];
-      const samplePixelPosition = sample.time * this.pixelsPerSecond;
-
-      const canvasX = width - (viewportEndPixel - samplePixelPosition);
-      const canvasY = centerY - (sample.value * amplitude);
-
-      if (canvasX >= -1 && canvasX <= width + 1) {
+    for (let x = 0; x < width; x++) {
+      const y = this.waveformBuffer[x];
+      
+      if (!isNaN(y)) {
         if (isFirstPoint) {
-          ctx.moveTo(canvasX, canvasY);
+          ctx.moveTo(x, y);
           isFirstPoint = false;
+        } else if (x === lastValidX + 1) {
+          ctx.lineTo(x, y);
         } else {
-          ctx.lineTo(canvasX, canvasY);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(x, y);
         }
+        lastValidX = x;
+      } else if (!isFirstPoint) {
+        ctx.stroke();
+        ctx.beginPath();
+        isFirstPoint = true;
+        lastValidX = -1;
       }
     }
 
     ctx.stroke();
+  }
+
+  /**
+   * Draw the sweep bar (clear/erase effect)
+   */
+  private drawSweepBar(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const sweepX = this.sweepPosition;
+    const sweepBarLeft = Math.max(0, Math.floor(sweepX - this.sweepBarWidth / 2));
+    const sweepBarRight = Math.min(width, Math.ceil(sweepX + this.sweepBarWidth / 2));
+
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+    ctx.fillRect(sweepBarLeft, 0, sweepBarRight - sweepBarLeft, height);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  private draw() {
+    const { width, height } = this.canvas;
+    const ctx = this.ctx;
+    const centerY = height / 2;
+
+    const currentTime = performance.now();
+    if (this.lastUpdateTime === 0) {
+      this.lastUpdateTime = currentTime;
+      this.sampleTime = 0;
+      this.sweepPosition = 0;
+      this.lastSweepX = -1;
+    }
+
+    this.ensureBufferSize();
+
+    const deltaTime = currentTime - this.lastUpdateTime;
+    const deltaTimeSeconds = deltaTime / 1000;
+    this.lastUpdateTime = currentTime;
+
+    this.updateSweep(width, centerY, deltaTimeSeconds);
+
+    // Clear canvas
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw components
+    this.drawBaseline(ctx, width, centerY);
+    this.drawWaveform(ctx, width);
+    this.drawSweepBar(ctx, width, height);
   }
 
   private animate = () => {
@@ -262,7 +314,13 @@ export class CanvasRenderer {
   };
 
   private startAnimation() {
-    this.startTime = 0;
+    this.lastUpdateTime = 0;
+    this.sampleTime = 0;
+    this.sweepPosition = 0;
+    this.lastSweepX = -1;
+    this.lastHeartRate = this.config.heartRate || 72;
+    this.phaseOffset = 0;
+    this.waveformBuffer.fill(NaN);
     this.animationFrameId = requestAnimationFrame(this.animate);
   }
 
@@ -272,16 +330,10 @@ export class CanvasRenderer {
 
   updatePathology(pathology: PathologyType) {
     this.targetPathology = pathology;
-    // Clear buffer to regenerate with new pathology
-    this.waveformSamples = [];
-    this.startTime = 0;
   }
 
   updateHeartRate(heartRate: number) {
     this.config = { ...this.config, heartRate };
-    // Clear buffer to regenerate with new heart rate
-    this.waveformSamples = [];
-    this.startTime = 0;
   }
 
   updateAmplitude(amplitude: number) {
@@ -311,7 +363,6 @@ export class CanvasRenderer {
       this.resizeObserver = null;
     }
 
-    this.waveformSamples = [];
+    this.waveformBuffer.fill(NaN);
   }
 }
-

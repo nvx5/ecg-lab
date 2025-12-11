@@ -358,6 +358,35 @@ The library generates realistic ECG waveforms with:
 
 Each pathology modifies these components according to medical characteristics.
 
+## Demo Page
+
+A live demo page is included to test and visualize the ECG waveforms. To run it:
+
+```bash
+# Build the library first
+npm run build
+
+# Start the demo server (opens in browser automatically)
+npm run demo:dev
+```
+
+Or use the preview mode after building:
+
+```bash
+npm run build
+npm run demo
+```
+
+The demo includes:
+- Interactive pathology selection buttons
+- Real-time heart rate adjustment (30-300 BPM)
+- Amplitude control (0.1-3.0)
+- Noise level adjustment (0-0.5)
+- Current settings display
+- Reset to defaults button
+
+Open `demo.html` in your browser or use the npm scripts above to run it with a dev server.
+
 ## Building from Source
 
 ```bash

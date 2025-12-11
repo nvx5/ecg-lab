@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ECG Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: monospace;
+      background: #fff;
+      color: #000;
+      padding: 20px;
+      font-size: 12px;
+    }
+    #ecg-canvas {
+      width: 100%;
+      height: 200px;
+      background: #000;
+      border: 1px solid #ccc;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .control {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    label { min-width: 60px; }
+    select, input[type="range"] {
+      padding: 4px;
+      border: 1px solid #ccc;
+      background: #fff;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    select { min-width: 120px; }
+    .value { min-width: 40px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <canvas id="ecg-canvas"></canvas>
+  
+  <div class="controls">
+    <div class="control">
+      <label>Path:</label>
+      <select id="pathology">
+        <option value="normal">Normal Sinus Rhythm</option>
+        <option value="sinus-tachycardia">Sinus Tachycardia</option>
+        <option value="sinus-bradycardia">Sinus Bradycardia</option>
+        <option value="sinus-arrhythmia">Sinus Arrhythmia</option>
+        <option value="atrial-fibrillation">Atrial Fibrillation</option>
+        <option value="atrial-flutter">Atrial Flutter</option>
+        <option value="atrial-premature-beat">Atrial Premature Beat</option>
+        <option value="ventricular-tachycardia">Ventricular Tachycardia</option>
+        <option value="ventricular-fibrillation">Ventricular Fibrillation</option>
+        <option value="ventricular-premature-beat">Ventricular Premature Beat</option>
+        <option value="first-degree-av-block">1st Degree AV Block</option>
+        <option value="second-degree-av-block-type1">2nd Degree AV Block Type 1</option>
+        <option value="second-degree-av-block-type2">2nd Degree AV Block Type 2</option>
+        <option value="third-degree-av-block">3rd Degree AV Block</option>
+        <option value="left-bundle-branch-block">Left Bundle Branch Block</option>
+        <option value="right-bundle-branch-block">Right Bundle Branch Block</option>
+        <option value="wolff-parkinson-white">Wolff-Parkinson-White</option>
+        <option value="left-ventricular-hypertrophy">Left Ventricular Hypertrophy</option>
+        <option value="right-ventricular-hypertrophy">Right Ventricular Hypertrophy</option>
+        <option value="st-elevation-mi">ST Elevation MI</option>
+        <option value="st-depression-ischemia">ST Depression (Ischemia)</option>
+        <option value="pathological-q-waves">Pathological Q Waves</option>
+        <option value="long-qt-syndrome">Long QT Syndrome</option>
+        <option value="hyperkalaemia">Hyperkalaemia</option>
+        <option value="right-atrial-hypertrophy">Right Atrial Hypertrophy</option>
+        <option value="left-atrial-hypertrophy">Left Atrial Hypertrophy</option>
+      </select>
+    </div>
+    <div class="control">
+      <label>HR:</label>
+      <input type="range" id="hr" min="30" max="200" value="72">
+      <span class="value" id="hr-val">72</span>
+    </div>
+    <div class="control">
+      <label>Amp:</label>
+      <input type="range" id="amp" min="0.1" max="3.0" value="1.0" step="0.1">
+      <span class="value" id="amp-val">1.0</span>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createECG } from './dist/index.esm.js';
+
+    const canvas = document.getElementById('ecg-canvas');
+    let ecg = createECG({ canvas, pathology: 'normal', heartRate: 72, amplitude: 1.0 });
+
+    document.getElementById('pathology').addEventListener('change', (e) => {
+      ecg.setPathology(e.target.value);
+    });
+
+    const hr = document.getElementById('hr');
+    hr.addEventListener('input', (e) => {
+      const v = e.target.value;
+      document.getElementById('hr-val').textContent = v;
+      ecg.setHeartRate(parseFloat(v));
+    });
+
+    const amp = document.getElementById('amp');
+    amp.addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value).toFixed(1);
+      document.getElementById('amp-val').textContent = v;
+      ecg.setAmplitude(parseFloat(v));
+    });
+  </script>
+</body>
+</html>

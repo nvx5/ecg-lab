@@ -9,9 +9,10 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.esm.js",
       "require": "./dist/index.cjs.js",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/index.esm.js"
     }
   },
   "files": [
@@ -22,6 +23,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "dev": "vite build --watch",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

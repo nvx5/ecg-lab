@@ -19,6 +19,18 @@ A lightweight, easy-to-use ECG waveform simulator library for web applications. 
 npm install ecg-lab
 ```
 
+### Local Development Setup
+
+If you're using this package locally (via `file:` protocol or `npm link`), make sure to build it first:
+
+```bash
+cd ecg-lab
+npm install
+npm run build
+```
+
+The `prepare` script will automatically build the package when installed via npm, but for local file paths, you may need to build manually.
+
 ## Quick Start
 
 ```typescript
@@ -370,6 +382,34 @@ MIT License - see LICENSE file for details.
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Troubleshooting
+
+### Vite Resolution Error
+
+If you encounter an error like "Failed to resolve entry for package 'ecg-lab'" when using this package locally:
+
+1. **Ensure the package is built**: Navigate to the `ecg-lab` directory and run:
+   ```bash
+   npm run build
+   ```
+
+2. **For local file paths**: If you're using `"ecg-lab": "file:../ecg-lab"` in your `package.json`, make sure to build the package before installing:
+   ```bash
+   cd ../ecg-lab
+   npm install
+   npm run build
+   cd ../your-project
+   npm install
+   ```
+
+3. **Verify dist folder exists**: Check that `ecg-lab/dist/` contains:
+   - `index.esm.js`
+   - `index.cjs.js`
+   - `index.umd.js`
+   - `index.d.ts`
+
+The `prepare` script should automatically build the package on `npm install`, but for local file paths, you may need to build manually.
 
 ## Disclaimer
 
